@@ -50,7 +50,7 @@ always_ff @(posedge clk_i or negedge rstn_i) begin  : programCounter_change_flip
 end
 
 always_ff @(posedge clk_i or negedge rstn_i) begin : programCounter_fetch_to_register_flipFLop
-    if(!rstn_i) begin
+    if(!rstn_i || is_Flush_d_execute) begin
         pc_q_fetch_to_decode <= '0; // eğer reset sinyali 0 ise program counter'ını sıfırla yani program counter'ı resetle.
     end
     else begin
@@ -60,7 +60,7 @@ end
 
 
 always_ff @(posedge clk_i or negedge rstn_i) begin : instr_d_flipFlop
-    if(!rstn_i) begin
+    if(!rstn_i || is_Flush_d_execute) begin
         instr_q_fetch <= '0; // eğer reset sinyali 0 ise instruction'ı sıfırla yani instruction'ı resetle.
     end
     else begin
@@ -115,6 +115,7 @@ end
     logic [     4:0] rs2_addr_d_decode;
     assign rs2_addr_d_decode = instr_d_decode[24:20];
     logic [     4:0] rs2_addr_q_decode;
+    
 
 
 always_comb begin : decode_block   //instr_d içindeki instruction'un decode edilmesi, bu aşamada instr_d'nin belirli kısımlarındaki OPCODE'ların ne olduğuna göre case'ler açıp o case'ler içinde o OPCODE'nin görevi
@@ -283,6 +284,8 @@ end
     logic            memory_write_enable_d_execute; // Hafızaya yazabilmemiz için hafızanın write enable'ının 1 olması gerekir.
     logic            memory_write_enable_q_execute; // Hafızaya yazma işleminin gerçekleşip gerçekleşmediğini kontrol eden sinyal.
 
+    logic            is_Flush_d_execute;
+
     always_comb begin : forward_comb
         
         //rs1 forward
@@ -311,6 +314,7 @@ always_comb begin : execute_block  //
     memory_write_enable_d_execute = 0;
     memory_write_data_d_execute   = 0;
     memory_write_addr_d_execute   = 0;
+    is_Flush_d_execute = 0;
     //----------------------------------------------------------------------------------------------------------------------------------------- 
     case(instr_d_execute[6:0])
         OpcodeLui: begin
@@ -326,6 +330,7 @@ always_comb begin : execute_block  //
             jump_pc_d_execute = imm_data_d_execute + pc_d_execute;
             rd_data_d_execute = pc_d_execute + 4;
             rf_write_enable_d_execute = 1'b1;      //rf_write_enable_d_execute 1 olarak ayarlandı ki yazma işlemi gerçekleşebilsin.
+            is_Flush_d_execute = 1'b1;
         end
         OpcodeJalr: begin
             jump_pc_valid_d_execute = 1'b1;
@@ -333,32 +338,39 @@ always_comb begin : execute_block  //
             jump_pc_d_execute[0] = 1'b0; // Burada en son bit 0 yapılıyor çünkü JALR komutunda en son bitin 0 olması gerekiyor.
             rd_data_d_execute = pc_d_execute + 4;
             rf_write_enable_d_execute = 1'b1;      //rf_write_enable_d_execute 1 olarak ayarlandı ki yazma işlemi gerçekleşebilsin.
+            is_Flush_d_execute = 1'b1;
         end
         OpcodeBranch:
             case(instr_d_execute[14:12])
              F3_BEQ: if(rs1_data_d_execute == rs2_data_d_execute) begin   // BRANCH IF EQUAL
                 jump_pc_d_execute = pc_d_execute + imm_data_d_execute;
                 jump_pc_valid_d_execute = 1'b1;
+                is_Flush_d_execute = 1'b1; // Branch olduğu için Flush işlemi yapıyoruz.
              end
              F3_BNE: if(rs1_data_d_execute != rs2_data_d_execute) begin   // BRANCH IF NOT EQUAL
                 jump_pc_d_execute = pc_d_execute + imm_data_d_execute;
                 jump_pc_valid_d_execute = 1'b1; 
+                is_Flush_d_execute = 1'b1;
              end 
              F3_BLT: if($signed(rs1_data_d_execute) < $signed(rs2_data_d_execute)) begin   // BRANCH IF LESS THAN, systemverilog'da signed ifadelerin gösterimi $signed şeklinde bu nedenle böyle ifade ettik.
                 jump_pc_d_execute = pc_d_execute + imm_data_d_execute;
-                jump_pc_valid_d_execute = 1'b1; 
+                jump_pc_valid_d_execute = 1'b1;
+                is_Flush_d_execute = 1'b1;
              end 
              F3_BGE: if($signed(rs1_data_d_execute) >= $signed(rs2_data_d_execute)) begin   // BRANCH IF GREATER OR EQUAL, systemverilog'da signed ifadelerin gösterimi $signed şeklinde bu nedenle böyle ifade ettik.
                 jump_pc_d_execute = pc_d_execute + imm_data_d_execute;
-                jump_pc_valid_d_execute = 1'b1; 
+                jump_pc_valid_d_execute = 1'b1;
+                is_Flush_d_execute = 1'b1; 
              end 
              F3_BLTU: if(rs1_data_d_execute < rs2_data_d_execute) begin   // BRANCH IF LESS THAN(UNSIGNED)
                 jump_pc_d_execute = pc_d_execute + imm_data_d_execute;
-                jump_pc_valid_d_execute = 1'b1; 
+                jump_pc_valid_d_execute = 1'b1;
+                is_Flush_d_execute = 1'b1; 
              end 
              F3_BGEU: if(rs1_data_d_execute >= rs2_data_d_execute) begin   // BRANCH IF GREATER OR EQUAL(UNSIGNED)
                 jump_pc_d_execute = pc_d_execute + imm_data_d_execute;
-                jump_pc_valid_d_execute = 1'b1; 
+                jump_pc_valid_d_execute = 1'b1;
+                is_Flush_d_execute = 1'b1; 
              end
              default: ; 
             endcase
