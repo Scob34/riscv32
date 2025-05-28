@@ -32,14 +32,17 @@ module tb ();
             //reg_addr 0 değilse yani bir register güncellemesi varsa o zaman program counter (pc), instruction (instr), register adresi (reg_addr) ve
             //register data(reg_data) değerlerini ekrana basıyoruz.
             if(update) begin
-                if(reg_addr == 0)
-                    $display("0x%8h (0x%8h) ",pc, instr);
-                else begin
-                    if(reg_addr < 10)
-                        $display("0x%8h (0x%8h) x%0d  0x%8h",pc, instr, reg_addr, reg_data); //aynı hizada olsun diye reg_addr sonrasında 2 boşluk bıraktık.
-                    else
-                        $display("0x%8h (0x%8h) x%0d 0x%8h",pc, instr, reg_addr, reg_data); // burada ise tek boşluk koyduk.
+                if(pc != 0) begin
+                    if((reg_addr == 0))
+                        $display("0x%8h (0x%8h) ",pc, instr);
+                    else begin
+                        if(reg_addr < 10)
+                            $display("0x%8h (0x%8h) x%0d  0x%8h",pc, instr, reg_addr, reg_data); //aynı hizada olsun diye reg_addr sonrasında 2 boşluk bıraktık.
+                        else
+                            $display("0x%8h (0x%8h) x%0d 0x%8h",pc, instr, reg_addr, reg_data); // burada ise tek boşluk koyduk.
+                    end
                 end
+                
                 #2;  //clk her 2 birim saniyede değişiyor(0-1, 1-0) bu nedenle 2 birim de bir program counter ı ekrana basıyoruz.
             end
         end

@@ -230,7 +230,7 @@ package riscv_pkg;
   localparam OpcodeLoadFp = 7'b00_001_11;
   localparam OpcodeCustom0 = 7'b00_010_11;
   localparam OpcodeMiscMem = 7'b00_011_11;
-  localparam OpcodeOpImm = 7'b00_100_11;
+  localparam OpcodeOpImm_OpcodeZbb = 7'b00_100_11;
   localparam OpcodeAuipc = 7'b00_101_11;
   localparam OpcodeOpImm32 = 7'b00_110_11;
   // Quadrant 1
@@ -989,7 +989,7 @@ package riscv_pkg;
     localparam F3_XORI = 3'b100;
     localparam F3_ORI  = 3'b110;
     localparam F3_ANDI = 3'b111;
-    localparam F3_SLLI = 3'b001;
+    localparam F3_SLLI_CLZ_CTZ_CPOP = 3'b001;
     localparam F3_SRLI_SRAI = 3'b101;
     localparam F3_JALR = 3'b000;
 
@@ -1065,6 +1065,15 @@ package riscv_pkg;
     AND,
     UNKNOWN
   } operation_e;
+
+  localparam F7_CLZ_CTZ_CPOP = 7'b0110000;
+  localparam CLZ_TYPE = 5'b00000;
+  localparam CPOP_TYPE = 5'b00010;
+  localparam CTZ_TYPE = 5'b00001;
+  localparam CLZ = 2'b00;
+  localparam CTZ = 2'b01;
+  localparam CPOP = 2'b10;
+
 
   // trace log compatible to spikes commit log feature
   // pragma translate_off

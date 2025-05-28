@@ -20,12 +20,12 @@ logic [XLEN-1:0] rf [31:0];       //32 bitlik 32 adet register file(rf) oluştur
 initial $readmemh("./test/test.hex", iMem, 0, MEM_SIZE);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-assign pc_o       = pc_q_memory;
+assign pc_o       = pc_d_writeback;
 //assign data_o     = dMem[addr_i];
-assign instr_o    = instr_q_memory;  //instr_d = iMem[pc_d[$clog2(MEM_SIZE) - 1 : 0]]; aşağıdaki programCounter_change_comb kısmında yandaki komut ile instr_d'yi okuduk zaten ve direkt instr_o'ya aktardık ki çıkışta görelim
+assign instr_o    = instr_d_writeback;  //instr_d = iMem[pc_d[$clog2(MEM_SIZE) - 1 : 0]]; aşağıdaki programCounter_change_comb kısmında yandaki komut ile instr_d'yi okuduk zaten ve direkt instr_o'ya aktardık ki çıkışta görelim
 assign reg_addr_o = rf_write_enable_d_writeback ? rd_d_writeback : '0;
 assign reg_data_o = rd_data_d_writeback;
-assign update_o   = rf_write_enable_d_writeback;
+assign update_o   = update_d_writeback;
 
 
 ///////////////////////////////////////FETCH AŞAMASI//////////////////////////////////////////////////////////////////////////////////////
@@ -36,16 +36,18 @@ logic [XLEN-1:0] pc_q_fetch_to_decode;
 logic            update_o_fetch;
 logic [XLEN-1:0] instr_d_fetch;
 logic [XLEN-1:0] instr_q_fetch;
+logic            update_d_fetch;
+logic            update_q_fetch;
 
 always_ff @(posedge clk_i or negedge rstn_i) begin  : programCounter_change_flipFlop  // program counter'ın değiştiği blok
     if(!rstn_i) begin
         pc_q_fetch <= 'h8000_0000; // eğer reset sinyali 0 ise program counter'ına 0 değeri atanır yani program counter'ı resetlenir. PC'yi 8000_0000 yapmamızın sebebi
                              // SPIKE SIMULATORU'nun RISC-V'da program counter'ı 0x8000_0000 adresinden başlatmasıdır.
-        update_o_fetch <= 0;       // eğer program counter'ın şimdiki değerine(pc_q) sonraki program counter(pc_d) ataması yapılmadıysa update_o = 0 yapılarak işlemin gerçekleşmediği gösterilir.
+        update_q_fetch <= 0;       // eğer program counter'ın şimdiki değerine(pc_q) sonraki program counter(pc_d) ataması yapılmadıysa update_o = 0 yapılarak işlemin gerçekleşmediği gösterilir.
     end
     else begin
         pc_q_fetch <= pc_d_fetch;       // eğer reset inyali 1 ise program counter'ına sıradaki program counter'ı atanır,
-        update_o_fetch <= 1;     //eğer program counter'ın şimdiki değerine(pc_q) sonraki program counter(pc_d) ataması yapıldıysa update_o = 1 yapılarak bu işlemin gerçekleşmiş olduğu gösterilir.
+        update_q_fetch <= 1;     //eğer program counter'ın şimdiki değerine(pc_q) sonraki program counter(pc_d) ataması yapıldıysa update_o = 1 yapılarak bu işlemin gerçekleşmiş olduğu gösterilir.
     end
 end
 
@@ -58,10 +60,20 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : programCounter_fetch_to_reg
     end
 end
 
+always_comb begin
+    if(is_Flush_d_execute)
+        update_d_fetch = 0;
+    else
+        update_d_fetch = 1; // eğer Flush sinyali 0 ise yani Flush işlemi yapılmadıysa update_o = 1 yapılarak bu işlemin gerçekleşmiş olduğu gösterilir
+end
+
 
 always_ff @(posedge clk_i or negedge rstn_i) begin : instr_d_flipFlop
     if(!rstn_i || is_Flush_d_execute) begin
         instr_q_fetch <= '0; // eğer reset sinyali 0 ise instruction'ı sıfırla yani instruction'ı resetle.
+    end
+    else if(is_Flush_d_execute) begin
+        instr_q_fetch <= 32'h00000013; // NOP sinyali verdik flush yapıldığı için.
     end
     else begin
         instr_q_fetch <= instr_d_fetch; // eğer reset sinyali 1 ise sıradaki instruction'ı pc_q'den al ve instr_d'ye ata.
@@ -115,11 +127,22 @@ end
     logic [     4:0] rs2_addr_d_decode;
     assign rs2_addr_d_decode = instr_d_decode[24:20];
     logic [     4:0] rs2_addr_q_decode;
+
+    //CLZ, CTZ, CPOP
+    logic [1:0]      Zbb_type_d_decode;
+    logic [1:0]      Zbb_type_q_decode;
     
+    logic [     4:0] Zbb_data_d_decode;  // CLZ, CTZ ve CPOP Zbb(bit manipülasyon) komutudur.
+    logic [     4:0] Zbb_data_q_decode;
 
-
+    logic            update_d_decode;
+    assign update_d_decode = update_q_fetch;
+    logic            update_q_decode;
+    
 always_comb begin : decode_block   //instr_d içindeki instruction'un decode edilmesi, bu aşamada instr_d'nin belirli kısımlarındaki OPCODE'ların ne olduğuna göre case'ler açıp o case'ler içinde o OPCODE'nin görevi
                                    //neyse onları yapıcaz. Opcode dediğimiz kısım istr_d'nin son 7 biti yani instr_d[6:0] kısmı.
+    
+    Zbb_type_d_decode = 2'b11;
     
     case(instr_d_decode[6:0])
         OpcodeLui:                 //Lui = Load Upper Immediate
@@ -177,30 +200,6 @@ always_comb begin : decode_block   //instr_d içindeki instruction'un decode edi
                 end
                 default: ;
             endcase
-        OpcodeOpImm:
-            case(instr_d_decode[14:12])     //FUNCT3 koduna bakıyoruz
-            //ADD IMMEDIATE, sonunda I varsa Immediate, yoksa mesela F3_ADD ise normal ADD işlemi. Diğer kodlar için de böyle.
-                F3_ADDI, F3_SLTI, F3_SLTIU, F3_XORI, F3_ORI, F3_ANDI : begin
-                    rs1_data_d_decode        = rf[instr_d_decode[19:15]];
-                    imm_data_d_decode[31:12] = {20{instr_d_decode[31]}};
-                    imm_data_d_decode[11:0]  = instr_d_decode[31:20]; 
-                end
-                F3_SLLI :
-                    if(instr_d_decode[31:25] == F7_SLLI) begin
-                        shamt_data_d_decode = instr_d_decode[24:20];
-                        rs1_data_d_decode   = rf[instr_d_decode[19:15]];          
-                    end
-                F3_SRLI_SRAI :
-                    if(instr_d_decode[31:25] == F7_SRLI) begin
-                        shamt_data_d_decode = instr_d_decode[24:20];
-                        rs1_data_d_decode   = rf[instr_d_decode[19:15]];
-                    end
-                    else if(instr_d_decode[31:25] == F7_SRAI) begin
-                        shamt_data_d_decode = instr_d_decode[24:20];
-                        rs1_data_d_decode   = rf[instr_d_decode[19:15]];
-                    end
-                default: ;
-            endcase
         OpcodeOp:
             case(instr_d_decode[14:12])
                 F3_ADD_SUB :
@@ -225,6 +224,43 @@ always_comb begin : decode_block   //instr_d içindeki instruction'un decode edi
                     end
                 default: ;
             endcase
+        OpcodeOpImm_OpcodeZbb:
+            case(instr_d_decode[14:12])
+                F3_SLLI_CLZ_CTZ_CPOP:
+                    case(instr_d_decode[31:25])
+                        F7_CLZ_CTZ_CPOP: begin
+                            rs1_data_d_decode = rf[instr_d_decode[19:15]];
+                            Zbb_data_d_decode = instr_d_decode[24:20];
+                            case(instr_d_decode[24:20])
+                                CLZ_TYPE:  Zbb_type_d_decode = 2'b00; //CLZ
+                                CTZ_TYPE:  Zbb_type_d_decode = 2'b01; //CTZ
+                                CPOP_TYPE: Zbb_type_d_decode = 2'b10; //CPOP
+                                default ;
+                            endcase
+                        end
+                        F7_SLLI: begin
+                            shamt_data_d_decode = instr_d_decode[24:20];
+                            rs1_data_d_decode   = rf[instr_d_decode[19:15]]; 
+                        end
+                        default ;
+                    endcase
+                //ADD IMMEDIATE, sonunda I varsa Immediate, yoksa mesela F3_ADD ise normal ADD işlemi. Diğer kodlar için de böyle.
+                F3_ADDI, F3_SLTI, F3_SLTIU, F3_XORI, F3_ORI, F3_ANDI : begin
+                    rs1_data_d_decode        = rf[instr_d_decode[19:15]];
+                    imm_data_d_decode[31:12] = {20{instr_d_decode[31]}};
+                    imm_data_d_decode[11:0]  = instr_d_decode[31:20]; 
+                end
+                F3_SRLI_SRAI :
+                    if(instr_d_decode[31:25] == F7_SRLI) begin
+                        shamt_data_d_decode = instr_d_decode[24:20];
+                        rs1_data_d_decode   = rf[instr_d_decode[19:15]];
+                    end
+                    else if(instr_d_decode[31:25] == F7_SRAI) begin
+                        shamt_data_d_decode = instr_d_decode[24:20];
+                        rs1_data_d_decode   = rf[instr_d_decode[19:15]];
+                    end
+                default ;
+            endcase
         default: ;
     endcase
 end
@@ -239,7 +275,22 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : decode_to_execute_ff
         pc_q_decode <= '0;
         rs1_addr_q_decode <= '0;
         rs2_addr_q_decode <= '0;
-    end else begin
+        Zbb_type_q_decode <= 2'b11;
+        Zbb_data_q_decode <= '0;
+    end else if(is_Flush_d_execute) begin
+        imm_data_q_decode <= 32'h00000013; // NOP sinyali.
+        rs1_data_q_decode <= '0;
+        rs2_data_q_decode <= '0;
+        shamt_data_q_decode <= '0;
+        instr_q_decode <= 32'h00000013; // NOP sinyali.
+        pc_q_decode <= '0;
+        rs1_addr_q_decode <= '0;
+        rs2_addr_q_decode <= '0;
+        update_q_decode <= 0;
+        Zbb_type_q_decode <= 2'b11;  // 11 olursa hiçbir şey yapmıcaz.
+        Zbb_data_q_decode <= '0;
+    end
+    else begin
         imm_data_q_decode <= imm_data_d_decode;
         rs1_data_q_decode <= rs1_data_d_decode;
         rs2_data_q_decode <= rs2_data_d_decode;
@@ -247,7 +298,10 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : decode_to_execute_ff
         instr_q_decode <= instr_d_decode;
         pc_q_decode <= pc_d_decode;
         rs1_addr_q_decode <= rs1_addr_d_decode;
-        rs2_addr_q_decode <= rs2_addr_d_decode; 
+        rs2_addr_q_decode <= rs2_addr_d_decode;
+        Zbb_type_q_decode <= Zbb_type_d_decode;
+        Zbb_data_q_decode <= Zbb_data_d_decode;
+        update_q_decode   <= update_d_decode; 
     end
 end
 //////////////////////////////////////////DECODE AŞAMASI//////////////////////////////////////////////////////////////////////////////////////
@@ -285,6 +339,16 @@ end
     logic            memory_write_enable_q_execute; // Hafızaya yazma işleminin gerçekleşip gerçekleşmediğini kontrol eden sinyal.
 
     logic            is_Flush_d_execute;
+
+    logic [     1:0] Zbb_type_d_execute;
+    assign Zbb_type_d_execute = Zbb_type_q_decode;
+    logic [     4:0] Zbb_data_d_execute;
+    assign Zbb_data_d_execute = Zbb_data_q_decode;
+    logic [XLEN-1:0] Zbb_result;
+
+    logic            update_d_execute;
+    assign update_d_execute = update_q_decode;
+    logic            update_q_execute;
 
     always_comb begin : forward_comb
         
@@ -430,7 +494,7 @@ always_comb begin : execute_block  //
              end
              default: ;
             endcase
-        OpcodeOpImm:
+        OpcodeOpImm_OpcodeZbb:
             case(instr_d_execute[14:12])
              F3_ADDI: begin
                 rf_write_enable_d_execute = 1'b1;
@@ -458,11 +522,48 @@ always_comb begin : execute_block  //
                 rf_write_enable_d_execute = 1'b1;
                 rd_data_d_execute = rs1_data_d_execute & imm_data_d_execute;
              end
-             F3_SLLI:     //SHIFT LEFT LOGICAL IMMEDIATE
-                if(instr_d_execute[31:25] == F7_SLLI) begin
-                    rf_write_enable_d_execute = 1'b1;
-                    rd_data_d_execute = rs1_data_d_execute << shamt_data_d_execute;
-                end
+             F3_SLLI_CLZ_CTZ_CPOP:     //SHIFT LEFT LOGICAL IMMEDIATE
+                case(instr_d_execute[31:25])
+                    F7_SLLI: begin
+                        rf_write_enable_d_execute = 1'b1;
+                        rd_data_d_execute = rs1_data_d_execute << shamt_data_d_execute;
+                    end
+                    F7_CLZ_CTZ_CPOP: begin
+                        rf_write_enable_d_execute = 1'b1;
+                            case(Zbb_type_d_execute)
+                                CLZ: begin
+                                    Zbb_result = '0;
+                                    for(int i = 31; i>= 0; i--) begin
+                                        if(!rs1_data_d_execute[i])
+                                            Zbb_result++;
+                                        else
+                                            break;
+                                    end
+                                    rd_data_d_execute = Zbb_result;
+                                end
+                                CTZ: begin
+                                    Zbb_result = '0;
+                                    for(int i = 0; i < 32; i++) begin
+                                        if(!rs1_data_d_execute[i])
+                                            Zbb_result++;
+                                        else
+                                            break;
+                                    end
+                                    rd_data_d_execute = Zbb_result;
+                                end
+                                CPOP: begin
+                                    Zbb_result = '0;
+                                    for(int i = 0; i < 32; i++) begin
+                                        if(rs1_data_d_execute[i])
+                                        Zbb_result++;      // rs1_data_d_execute değerinin i. biti ne ise kadar arttırır, 1 ise 1 arttırır 0 ise 0 arttırır.
+                                    end
+                                    rd_data_d_execute = Zbb_result;
+                                end
+                                default: ; 
+                            endcase
+                    end
+                    default: ;
+                endcase
             F3_SRLI_SRAI:     
                 if(instr_d_execute[31:25] == F7_SRLI) begin          //SHIFT RIGHT LOGICAL IMMEDIATE
                     rf_write_enable_d_execute = 1'b1;
@@ -535,6 +636,7 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : execute_to_memory_ff
         memory_write_data_q_execute <= '0;
         memory_write_addr_q_execute <= '0;
         memory_write_enable_q_execute <= '0;
+        update_q_execute <= '0;
     end else begin
         pc_q_execute <= pc_d_execute;
         instr_q_execute <= instr_d_execute;
@@ -544,6 +646,7 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : execute_to_memory_ff
         memory_write_data_q_execute <= memory_write_data_d_execute;
         memory_write_addr_q_execute <= memory_write_addr_d_execute;
         memory_write_enable_q_execute <= memory_write_enable_d_execute;
+        update_q_execute <= update_d_execute;
     end
 end
 //////////////////////////////////////////EXECUTE AŞAMASI//////////////////////////////////////////////////////////////////////////////////////
@@ -575,6 +678,10 @@ end
     assign rf_write_enable_d_memory = rf_write_enable_q_execute; //rf_write_enable_d_memory, execute aşamasında elde edilen rf_write_enable_q_execute değerini alır.
     logic rf_write_enable_q_memory;
 
+    logic update_d_memory;
+    assign update_d_memory = update_q_execute;
+    logic update_q_memory;
+
 always_ff @(posedge clk_i or negedge rstn_i) begin   //Store işlemi için gerekli kod bloğu
     if(!rstn_i) begin
     end
@@ -598,12 +705,14 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : memory_to_writebak_ff
         rd_data_q_memory <= '0;
         rd_q_memory <= '0;
         rf_write_enable_q_memory <= '0;
+        update_q_memory <= '0;
     end else begin
         pc_q_memory <= pc_d_memory;
         instr_q_memory <= instr_d_memory;
         rd_data_q_memory <= rd_data_d_memory;
         rd_q_memory <= rd_d_memory;
         rf_write_enable_q_memory <= rf_write_enable_d_memory;
+        update_q_memory <= update_d_memory;
     end
 end
 //////////////////////////////////////////MEMORY AŞAMASI/////////////////////////////////////////////////////////////////////////////////////////////
@@ -623,6 +732,9 @@ end
 
     logic            rf_write_enable_d_writeback; 
     assign           rf_write_enable_d_writeback = rf_write_enable_q_memory;
+
+    logic update_d_writeback;
+    assign update_d_writeback = update_q_memory;
 
     always_ff @(negedge clk_i or negedge rstn_i) begin //register file'a write back aşaması.
         if(!rstn_i) begin
