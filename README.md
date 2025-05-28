@@ -1,1 +1,1 @@
-# riscv32
+# riscv-single-cycle
