@@ -17,12 +17,12 @@ parameter int MEM_SIZE = 2048; // Memory tanımlamalarında bu parametreyi kulla
 logic [31:0]     iMem [MEM_SIZE-1:0]; // instruction memory tanımlamasını yaptık
 logic [31:0]     dMem [MEM_SIZE-1:0]; // data memory tanımlamasını yaptık
 logic [XLEN-1:0] rf [31:0];       //32 bitlik 32 adet register file(rf) oluşturduk
-initial $readmemh("./test/deneme.hex", iMem, 0, MEM_SIZE);
+initial $readmemh("./test/test.hex", iMem, 0, MEM_SIZE);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-assign pc_o       = pc_d_fetch;
+assign pc_o       = pc_q_memory;
 //assign data_o     = dMem[addr_i];
-assign instr_o    = instr_d_fetch;  //instr_d = iMem[pc_d[$clog2(MEM_SIZE) - 1 : 0]]; aşağıdaki programCounter_change_comb kısmında yandaki komut ile instr_d'yi okuduk zaten ve direkt instr_o'ya aktardık ki çıkışta görelim
+assign instr_o    = instr_q_memory;  //instr_d = iMem[pc_d[$clog2(MEM_SIZE) - 1 : 0]]; aşağıdaki programCounter_change_comb kısmında yandaki komut ile instr_d'yi okuduk zaten ve direkt instr_o'ya aktardık ki çıkışta görelim
 assign reg_addr_o = rf_write_enable_d_writeback ? rd_d_writeback : '0;
 assign reg_data_o = rd_data_d_writeback;
 assign update_o   = rf_write_enable_d_writeback;
@@ -32,6 +32,7 @@ assign update_o   = rf_write_enable_d_writeback;
 
 logic [XLEN-1:0] pc_d_fetch; // program counter'ın girişi. Yani sıradaki program counter değerini ifade eder.
 logic [XLEN-1:0] pc_q_fetch; // program counter'ın çıkışı. Yani şu anki kullanılan program counter değerini ifade eder.
+logic [XLEN-1:0] pc_q_fetch_to_decode;
 logic            update_o_fetch;
 logic [XLEN-1:0] instr_d_fetch;
 logic [XLEN-1:0] instr_q_fetch;
@@ -46,7 +47,15 @@ always_ff @(posedge clk_i or negedge rstn_i) begin  : programCounter_change_flip
         pc_q_fetch <= pc_d_fetch;       // eğer reset inyali 1 ise program counter'ına sıradaki program counter'ı atanır,
         update_o_fetch <= 1;     //eğer program counter'ın şimdiki değerine(pc_q) sonraki program counter(pc_d) ataması yapıldıysa update_o = 1 yapılarak bu işlemin gerçekleşmiş olduğu gösterilir.
     end
+end
 
+always_ff @(posedge clk_i or negedge rstn_i) begin : programCounter_fetch_to_register_flipFLop
+    if(!rstn_i) begin
+        pc_q_fetch_to_decode <= '0; // eğer reset sinyali 0 ise program counter'ını sıfırla yani program counter'ı resetle.
+    end
+    else begin
+        pc_q_fetch_to_decode <= pc_q_fetch; // eğer reset sinyali 1 ise sıradaki program counter'ı pc_q'den al ve pc_q_fetch_to_decode'ya ata.
+    end
 end
 
 
@@ -60,7 +69,7 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : instr_d_flipFlop
 end
 
 always_comb begin : programCounter_change_comb
-    pc_d_fetch = pc_q_fetch;
+    //pc_d_fetch = pc_q_fetch;
     if(jump_pc_valid_d_execute)        // eğer jump_pc_valid_d değeri 1 olduysa dışarıdan komut gelmiştir ve başka bir program counter(pc) gelmiştir o halde işlemci counter'ını normal
         pc_d_fetch = jump_pc_d_execute;      // şekilde işletmek yerine dışarıdan gelen bu program counter'ı pc_d girişine atıyoruz ve bu sayede yeni program counter'ı çıkışa aktarılıyor 
     else                       // yukarıdaki pc_q <= pc_d sayesinde
@@ -96,8 +105,16 @@ end
     assign instr_d_decode = instr_q_fetch; //instr_d_decode, fetch aşamasında elde edilen instr_q_fetch değerini alır.
     logic [XLEN-1:0] instr_q_decode;
     logic [XLEN-1:0] pc_d_decode;
-    assign pc_d_decode = pc_q_fetch; //pc_d_decode, fetch aşamasında elde edilen pc_q_fetch değerini alır.
+    assign pc_d_decode = pc_q_fetch_to_decode; //pc_d_decode, fetch aşamasında elde edilen pc_q_fetch değerini alır.
     logic [XLEN-1:0] pc_q_decode;
+
+    logic [     4:0] rs1_addr_d_decode;
+    assign rs1_addr_d_decode = instr_d_decode[19:15];
+    logic [     4:0] rs1_addr_q_decode;
+    
+    logic [     4:0] rs2_addr_d_decode;
+    assign rs2_addr_d_decode = instr_d_decode[24:20];
+    logic [     4:0] rs2_addr_q_decode;
 
 
 always_comb begin : decode_block   //instr_d içindeki instruction'un decode edilmesi, bu aşamada instr_d'nin belirli kısımlarındaki OPCODE'ların ne olduğuna göre case'ler açıp o case'ler içinde o OPCODE'nin görevi
@@ -219,13 +236,17 @@ always_ff @(posedge clk_i or negedge rstn_i) begin : decode_to_execute_ff
         shamt_data_q_decode <= '0;
         instr_q_decode <= '0;
         pc_q_decode <= '0;
+        rs1_addr_q_decode <= '0;
+        rs2_addr_q_decode <= '0;
     end else begin
         imm_data_q_decode <= imm_data_d_decode;
         rs1_data_q_decode <= rs1_data_d_decode;
         rs2_data_q_decode <= rs2_data_d_decode;
         shamt_data_q_decode <= shamt_data_d_decode;
         instr_q_decode <= instr_d_decode;
-        pc_q_decode <= pc_d_decode; 
+        pc_q_decode <= pc_d_decode;
+        rs1_addr_q_decode <= rs1_addr_d_decode;
+        rs2_addr_q_decode <= rs2_addr_d_decode; 
     end
 end
 //////////////////////////////////////////DECODE AŞAMASI//////////////////////////////////////////////////////////////////////////////////////
@@ -243,9 +264,7 @@ end
     assign instr_d_execute = instr_q_decode; //instr_d_execute, decode aşamasında elde edilen instr_q_decode değerini alır.
     logic [XLEN-1:0] instr_q_execute;
     logic [XLEN-1:0] rs1_data_d_execute;
-    assign rs1_data_d_execute = rs1_data_q_decode; //rs1_data_d_execute, decode aşamasında elde edilen rs1_data_q_decode değerini alır.
     logic [XLEN-1:0] rs2_data_d_execute;
-    assign rs2_data_d_execute = rs2_data_q_decode; //rs2_data_d_execute, decode aşamasında elde edilen rs2_data_q_decode değerini alır.
     logic [4:0] shamt_data_d_execute;
     assign shamt_data_d_execute = shamt_data_q_decode; //shamt_data_d_execute, decode aşamasında elde edilen shamt_data_q_decode değerini alır.
     logic [XLEN-1:0] rd_data_d_execute; // execute aşamasındaki register destination data
@@ -264,7 +283,24 @@ end
     logic            memory_write_enable_d_execute; // Hafızaya yazabilmemiz için hafızanın write enable'ının 1 olması gerekir.
     logic            memory_write_enable_q_execute; // Hafızaya yazma işleminin gerçekleşip gerçekleşmediğini kontrol eden sinyal.
 
- 
+    always_comb begin : forward_comb
+        
+        //rs1 forward
+        if(forward_rs1 == 2'b01)
+            rs1_data_d_execute = rd_data_q_execute;
+        else if (forward_rs1 == 2'b10)
+            rs1_data_d_execute = rd_data_q_memory;
+        else
+            rs1_data_d_execute = rs1_data_q_decode;
+
+        //rs2 forward
+        if(forward_rs2 == 2'b01)
+            rs2_data_d_execute = rd_data_q_execute;  // execute aşamasından forward
+        else if(forward_rs2 == 2'b10)
+            rs2_data_d_execute = rd_data_q_memory;   // memory aşamasından forward
+        else
+            rs2_data_d_execute = rs2_data_q_decode;  // forward yok
+    end
 
 always_comb begin : execute_block  //
     // Burada eğer herhangi bir case durumuna girmezsek, bir önceki değeri tutup latch oluşturmasın diye en başta bütün verileri sıfırlıyoruz.
@@ -473,6 +509,8 @@ always_comb begin : execute_block  //
         endcase
         default: ;
     endcase
+
+
 end
 
 always_ff @(posedge clk_i or negedge rstn_i) begin : execute_to_memory_ff
@@ -572,7 +610,7 @@ end
     assign rd_d_writeback = rd_q_memory;
 
     logic            rf_write_enable_d_writeback; 
-    assign rf_write_enable_d_writeback = rf_write_enable_q_memory;
+    assign           rf_write_enable_d_writeback = rf_write_enable_q_memory;
 
     always_ff @(negedge clk_i or negedge rstn_i) begin //register file'a write back aşaması.
         if(!rstn_i) begin
@@ -589,28 +627,31 @@ end
 
     
     //FORWARD UNIT
-    logic            rf_write_enable_d_hazard;
-    assign           rf_write_enable_d_hazard = rf_write_enable_q_execute;
 
-    logic [     4:0] rd_d_hazard;
-    assign           rd_d_hazard = rd_q_execute;
+    logic [1:0]      forward_rs1;
+    logic [1:0]      forward_rs2;
+    // Forward For RS1
 
-    logic [XLEN-1:0] rs1_data_d_hazard;
-    assign           rs1_data_d_hazard = rs1_data_q_decode;
+    always_comb begin
+        if(rf_write_enable_q_execute && (rd_q_execute != 0) && (rd_q_execute == rs1_addr_q_decode))
+            forward_rs1 = 2'b01; // 01 ise execute aşamasından forward edilecek.
+        else if(rf_write_enable_q_memory && (rd_q_memory != 0) && (rd_q_memory == rs1_addr_q_decode))
+            forward_rs1 = 2'b10; // 10 ise memory aşamasından forward edilecek.
+        else
+            forward_rs1 = 2'b00; // 00 ise forward edilmeyecek.
+    end
 
-    logic [XLEN-1:0] rs2_data_d_hazard;
-    assign           rs2_data_d_hazard = rs2_data_q_decode;
+    // Forward For RS2
+    
+    always_comb begin
+        if(rf_write_enable_q_execute && (rd_q_execute != 0) && (rd_q_execute == rs2_addr_q_decode))
+            forward_rs2 = 2'b01; // 01 ise execute aşamasından forward edilecek.
+        else if(rf_write_enable_q_memory && (rd_q_memory != 0) && (rd_q_memory == rs2_addr_q_decode))
+            forward_rs2 = 2'b10; // 10 ise memory aşamasından forward edilecek.
+        else
+            forward_rs2 = 2'b00; // 00 ise forward edilmeyecek.
+    end
 
-    logic            forward_rs1_d_hazard;
-    assign           forward_rs1_d_hazard = (rf_write_enable_d_hazard && (rd_d_hazard != 0) && (rd_d_hazard == rs1_data_d_hazard));
-    logic            forward_rs2_d_hazard;
-    assign           forward_rs2_d_hazard = (rf_write_enable_d_hazard && (rd_d_hazard != 0) && (rd_d_hazard == rs2_data_d_hazard));
     //FORWARD UNIT
-
-    
-
-    
-
-
 
 endmodule

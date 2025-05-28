@@ -17,7 +17,7 @@ wave: run
 clean:
 	@echo "Cleaning up..."
 	rm -rf obj_dir;
-	rm dump.vcd
+	rm -f dump.vcd
 	rm pc.log
 
 .PHONY: all lint build run wave clean
